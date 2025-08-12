@@ -149,7 +149,7 @@ def index():
 
             if pool:
                 # <-- CLUSTER here: pick the lowest inside the densest window
-                best_total, best_row, used_rows = compute_suggestion(
+                best_total, best_row, _ = compute_suggestion(
                     pool,
                     method="mode",               # densest price window
                     window=PRICE_CLUSTER_WINDOW, # tighten/loosen cluster span
@@ -157,7 +157,7 @@ def index():
                 )
                 if best_row:
                     ebay_abs_row = best_row
-                    ebay_abs_total = float(best_row["total"])
+                    ebay_abs_total = float(best_total)
 
 
         # Amazon total
