@@ -103,7 +103,7 @@ def index():
         amz_title = (amazon.get("title") if amazon else "") or ""
         amz_toks = tokens(amz_title)
 
-        # ---------- Exact-UPC-first with title guard (>= 0.60) ----------
+        # ---------- Exact-UPC-first with title guard (>= 0.75) ----------
         user_code = _norm_digits(code)
         ebay_exact_row = None
         ebay_exact_total = None
