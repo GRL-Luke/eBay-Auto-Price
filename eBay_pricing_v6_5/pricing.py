@@ -109,6 +109,16 @@ def round_same_dollar_to_99(x: float) -> float:
         return 0.99
     return math.floor(x) + 0.99
 
+
+def within_range(ebay_price: Optional[float], amazon_price: Optional[float], pct: float = 0.25) -> bool:
+    """Return True if ``ebay_price`` is within ``pct`` of ``amazon_price``.
+
+    If either price is ``None`` the check passes.
+    """
+    if ebay_price is None or amazon_price is None:
+        return True
+    return abs(ebay_price - amazon_price) <= amazon_price * pct
+
 # --- final chooser: undercut the lower of Amazon/eBay ---
 def choose_and_suggest(amazon_total: Optional[float], ebay_total: Optional[float]) -> Dict:
     """
@@ -131,4 +141,8 @@ def choose_and_suggest(amazon_total: Optional[float], ebay_total: Optional[float
     # Undercut by $1, then snap to D+.99
     target = comp - 1.0
     suggested = round_same_dollar_to_99(target)
+    # Ensure at least a full $1 undercut after rounding
+    while suggested > comp - 1.0:
+        target -= 1.0
+        suggested = round_same_dollar_to_99(target)
     return {"source": source, "competitor_price": comp, "suggested": suggested}
