@@ -1,19 +1,37 @@
 
 from __future__ import annotations
 import os, asyncio, re
+from typing import List, Dict
 from flask import Flask, render_template, request
 from scraping import scrape_multi, detect_pack_qty
-from pricing import compute_suggestion, choose_and_suggest, tokens, jaccard
+from pricing import compute_suggestion, choose_and_suggest, tokens, jaccard, within_range
 
 app = Flask(__name__)
 
 TITLE_SIM_THRESHOLD = 0.75  # title guard for exact UPC matches
 
 PRICE_CLUSTER_WINDOW = 8.0   # dollars spanned by the densest cluster window (try 6–10)
+AMAZON_RANGE_PCT = 0.25      # eBay listing must be within 25% of Amazon
 
 
 def _norm_digits(x: str) -> str:
     return re.sub(r"[^0-9]", "", x or "")
+
+
+def row_matches_upc(r: Dict, user_code: str) -> bool:
+    if not user_code:
+        return True
+    for k in ("upc", "code", "barcode", "item_upc"):
+        v = r.get(k)
+        if v:
+            rc = _norm_digits(str(v))
+            if rc and rc != user_code:
+                return False
+    return True
+
+
+def filter_rows_by_upc(rows: List[Dict], user_code: str) -> List[Dict]:
+    return [r for r in rows if row_matches_upc(r, user_code)]
 
 def default_ctx():
     return {
@@ -97,16 +115,17 @@ def index():
         amazon = data.get("amazon")
 
         rows = data.get("filtered_rows") or raw_rows
-        comp_rows = rows
+        user_code = _norm_digits(code)
+        comp_rows = filter_rows_by_upc(rows, user_code)
 
         # ---------- Amazon context ----------
         amz_title = (amazon.get("title") if amazon else "") or ""
         amz_toks = tokens(amz_title)
 
         # ---------- Exact-UPC-first with title guard (>= 0.75) ----------
-        user_code = _norm_digits(code)
         ebay_exact_row = None
         ebay_exact_total = None
+        exacts: List[Dict] = []
 
         if comp_rows and user_code:
             def row_code_match(r):
@@ -130,34 +149,34 @@ def index():
                 ebay_exact_total = float(ebay_exact_row["total"])
 
         # ---------- If no exact code+title match, use absolute-low from comp_rows ----------
-            ebay_abs_row = None
-            ebay_abs_total = None
-            if comp_rows:
-                valids = [r for r in comp_rows if r.get("total") is not None]
-                pool = []
+        ebay_abs_row = None
+        ebay_abs_total = None
+        if not exacts and comp_rows:
+            valids = [r for r in comp_rows if r.get("total") is not None]
+            pool = []
 
-                if valids:
-                    if amz_toks:
-                        strict = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= TITLE_SIM_THRESHOLD]
-                        if strict:
-                            pool = strict
-                        else:
-                            relaxed = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= 0.45]
-                            pool = relaxed if relaxed else valids
+            if valids:
+                if amz_toks:
+                    strict = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= TITLE_SIM_THRESHOLD]
+                    if strict:
+                        pool = strict
                     else:
-                        pool = valids
+                        relaxed = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= 0.45]
+                        pool = relaxed if relaxed else valids
+                else:
+                    pool = valids
 
-                if pool:
-                    # <-- CLUSTER here: pick the lowest inside the densest window
-                    best_total, best_row, used_rows = compute_suggestion(
-                        pool,
-                        method="mode",               # densest price window
-                        window=PRICE_CLUSTER_WINDOW, # tighten/loosen cluster span
-                        # min_price=None, max_price=None   # you can add hard caps if you want
-                    )
-                    if best_row:
-                        ebay_abs_row = best_row
-                        ebay_abs_total = float(best_row["total"])
+            if pool:
+                # <-- CLUSTER here: pick the lowest inside the densest window
+                best_total, best_row, used_rows = compute_suggestion(
+                    pool,
+                    method="mode",               # densest price window
+                    window=PRICE_CLUSTER_WINDOW, # tighten/loosen cluster span
+                    # min_price=None, max_price=None   # you can add hard caps if you want
+                )
+                if best_row:
+                    ebay_abs_row = best_row
+                    ebay_abs_total = float(best_row["total"])
 
 
         # Amazon total
@@ -166,6 +185,10 @@ def index():
         # Prefer exact eBay if available
         ebay_to_use = ebay_exact_total if ebay_exact_total is not None else ebay_abs_total
         ebay_row_ref = ebay_exact_row if ebay_exact_row is not None else ebay_abs_row
+
+        if amz_total is not None and ebay_to_use is not None and not within_range(ebay_to_use, amz_total, pct=AMAZON_RANGE_PCT):
+            ebay_to_use = None
+            ebay_row_ref = None
 
         pick = choose_and_suggest(amz_total, ebay_to_use)
 
