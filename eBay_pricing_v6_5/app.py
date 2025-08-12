@@ -107,6 +107,8 @@ def index():
         user_code = _norm_digits(code)
         ebay_exact_row = None
         ebay_exact_total = None
+        ebay_abs_row = None
+        ebay_abs_total = None
 
         if comp_rows and user_code:
             def row_code_match(r):
@@ -130,35 +132,32 @@ def index():
                 ebay_exact_total = float(ebay_exact_row["total"])
 
         # ---------- If no exact code+title match, use absolute-low from comp_rows ----------
-        # ---------- If no exact code+title match, use absolute-low from comp_rows ----------
-            ebay_abs_row = None
-            ebay_abs_total = None
-            if comp_rows:
-                valids = [r for r in comp_rows if r.get("total") is not None]
-                pool = []
+        if comp_rows:
+            valids = [r for r in comp_rows if r.get("total") is not None]
+            pool = []
 
-                if valids:
-                    if amz_toks:
-                        strict = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= TITLE_SIM_THRESHOLD]
-                        if strict:
-                            pool = strict
-                        else:
-                            relaxed = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= 0.45]
-                            pool = relaxed if relaxed else valids
+            if valids:
+                if amz_toks:
+                    strict = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= TITLE_SIM_THRESHOLD]
+                    if strict:
+                        pool = strict
                     else:
-                        pool = valids
+                        relaxed = [r for r in valids if jaccard(amz_toks, tokens(r.get("title") or "")) >= 0.45]
+                        pool = relaxed if relaxed else valids
+                else:
+                    pool = valids
 
-                if pool:
-                    # <-- CLUSTER here: pick the lowest inside the densest window
-                    best_total, best_row, used_rows = compute_suggestion(
-                        pool,
-                        method="mode",               # densest price window
-                        window=PRICE_CLUSTER_WINDOW, # tighten/loosen cluster span
-                        # min_price=None, max_price=None   # you can add hard caps if you want
-                    )
-                    if best_row:
-                        ebay_abs_row = best_row
-                        ebay_abs_total = float(best_row["total"])
+            if pool:
+                # <-- CLUSTER here: pick the lowest inside the densest window
+                best_total, best_row, used_rows = compute_suggestion(
+                    pool,
+                    method="mode",               # densest price window
+                    window=PRICE_CLUSTER_WINDOW, # tighten/loosen cluster span
+                    # min_price=None, max_price=None   # you can add hard caps if you want
+                )
+                if best_row:
+                    ebay_abs_row = best_row
+                    ebay_abs_total = float(best_row["total"])
 
 
         # Amazon total
