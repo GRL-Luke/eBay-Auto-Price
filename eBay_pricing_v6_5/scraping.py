@@ -324,6 +324,28 @@ def _unwrap_ebay_url(href: str) -> Optional[str]:
         pass
     return None
 
+UPC_CANDIDATE_RE = re.compile(r"\b\d{8,14}\b")
+
+def _text_has_code(text: str, norm_code: str) -> bool:
+    if not text or not norm_code:
+        return False
+    for m in UPC_CANDIDATE_RE.findall(text):
+        if normalize_upc(m) == norm_code:
+            return True
+    return False
+
+async def _listing_has_code(context, url: str, norm_code: str, timeout_ms: int = 8000) -> bool:
+    page = await context.new_page()
+    try:
+        await page.goto(url, timeout=timeout_ms)
+        await _dismiss(page)
+        body = await page.inner_text("body")
+        return _text_has_code(body, norm_code)
+    except Exception:
+        return False
+    finally:
+        await page.close()
+
 def _is_brand_new_only(cond_text: str) -> bool:
     if not cond_text:
         return False
@@ -346,7 +368,7 @@ async def _auto_scroll(page, steps: int = 8, delay_ms: int = 250):
         await page.evaluate(f"window.scrollTo(0, {pos});")
         await page.wait_for_timeout(delay_ms)
 
-async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms: int = 22000, visible: bool = False, pages: int = 1, retries: int = 3) -> List[Dict]:
+async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms: int = 22000, visible: bool = False, pages: int = 1, retries: int = 3, check_code: Optional[str] = None) -> List[Dict]:
     """
     USA-only via LH_PrefLoc=1, non-sponsored, BIN only; brand new if condition=='new'.
     Retries each page up to `retries` times before moving on.
@@ -357,6 +379,7 @@ async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms:
     )
     page = await context.new_page()
     results: List[Dict] = []
+    norm_code = normalize_upc(check_code) if check_code else ""
     try:
         base = f"https://www.ebay.com/sch/i.html?_nkw={quote_plus(query)}&rt=nc&LH_BIN=1&LH_PrefLoc=1"
         if condition.lower() == "new":
@@ -416,7 +439,7 @@ async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms:
                 if condition.lower() == "new" and not _is_brand_new_only(cond_text or ""):
                     continue
                 if total is not None:
-                    results.append({
+                    row = {
                         "source": "eBay",
                         "query": query,
                         "title": (title or "").strip(),
@@ -425,8 +448,17 @@ async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms:
                         "total": total,
                         "condition": (cond_text or "").strip(),
                         "url": url,
-                        "has_code": False
-                    })
+                        "has_code": False,
+                    }
+                    if norm_code:
+                        if _text_has_code(title or "", norm_code):
+                            row["has_code"] = True
+                            row["code"] = norm_code
+                        else:
+                            if await _listing_has_code(context, url, norm_code):
+                                row["has_code"] = True
+                                row["code"] = norm_code
+                    results.append(row)
         # de-dup by URL
         dedup = {r["url"]: r for r in results}
         return list(dedup.values())
@@ -499,12 +531,12 @@ async def scrape_multi(
             if len(rows) >= 3:
                 break
             try:
-                batch = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries)
+                batch = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries, check_code=normalized_code)
                 rows.extend(batch)
                 # if still thin, try again up to 'attempts'
                 tries = 1
                 while len(rows) < 3 and tries < attempts:
-                    more = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries)
+                    more = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries, check_code=normalized_code)
                     rows.extend(more)
                     tries += 1
             except Exception:

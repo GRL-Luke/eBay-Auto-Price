@@ -324,6 +324,28 @@ def _unwrap_ebay_url(href: str) -> Optional[str]:
         pass
     return None
 
+UPC_CANDIDATE_RE = re.compile(r"\b\d{8,14}\b")
+
+def _text_has_code(text: str, norm_code: str) -> bool:
+    if not text or not norm_code:
+        return False
+    for m in UPC_CANDIDATE_RE.findall(text):
+        if normalize_upc(m) == norm_code:
+            return True
+    return False
+
+async def _listing_has_code(context, url: str, norm_code: str, timeout_ms: int = 8000) -> bool:
+    page = await context.new_page()
+    try:
+        await page.goto(url, timeout=timeout_ms)
+        await _dismiss(page)
+        body = await page.inner_text("body")
+        return _text_has_code(body, norm_code)
+    except Exception:
+        return False
+    finally:
+        await page.close()
+
 def _is_brand_new_only(cond_text: str) -> bool:
     if not cond_text:
         return False
@@ -346,13 +368,14 @@ async def _auto_scroll(page, steps: int = 8, delay_ms: int = 250):
         await page.evaluate(f"window.scrollTo(0, {pos});")
         await page.wait_for_timeout(delay_ms)
 
-async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms: int = 22000, visible: bool = False, pages: int = 1, retries: int = 2) -> List[Dict]:
+async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms: int = 22000, visible: bool = False, pages: int = 1, retries: int = 2, check_code: Optional[str] = None) -> List[Dict]:
     browser = await play.chromium.launch(headless=(not visible))
     context = await browser.new_context(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     )
     page = await context.new_page()
     results: List[Dict] = []
+    norm_code = normalize_upc(check_code) if check_code else ""
     try:
         base = f"https://www.ebay.com/sch/i.html?_nkw={quote_plus(query)}&rt=nc&LH_BIN=1"
         if condition.lower() == "new":
@@ -408,7 +431,7 @@ async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms:
                 if condition.lower() == "new" and not _is_brand_new_only(cond_text or ""):
                     continue
                 if total is not None:
-                    results.append({
+                    row = {
                         "source": "eBay",
                         "query": query,
                         "title": title.strip(),
@@ -417,8 +440,17 @@ async def fetch_ebay_query(play, query: str, condition: str = "new", timeout_ms:
                         "total": total,
                         "condition": cond_text.strip() if cond_text else "",
                         "url": url,
-                        "has_code": False
-                    })
+                        "has_code": False,
+                    }
+                    if norm_code:
+                        if _text_has_code(title or "", norm_code):
+                            row["has_code"] = True
+                            row["code"] = norm_code
+                        else:
+                            if await _listing_has_code(context, url, norm_code):
+                                row["has_code"] = True
+                                row["code"] = norm_code
+                    results.append(row)
         return results
     finally:
         await context.close()
@@ -489,7 +521,7 @@ async def scrape_multi(
             if len(rows) >= 3:  # sufficient pool
                 break
             try:
-                batch = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries)
+                batch = await fetch_ebay_query(play, q, condition=condition, visible=False, pages=pages, retries=retries, check_code=normalized_code)
                 rows.extend(batch)
             except Exception:
                 continue
