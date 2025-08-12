@@ -130,7 +130,6 @@ def index():
                 ebay_exact_total = float(ebay_exact_row["total"])
 
         # ---------- If no exact code+title match, use absolute-low from comp_rows ----------
-        # ---------- If no exact code+title match, use absolute-low from comp_rows ----------
             ebay_abs_row = None
             ebay_abs_total = None
             if comp_rows:
