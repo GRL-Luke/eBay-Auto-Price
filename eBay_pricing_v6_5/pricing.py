@@ -42,6 +42,10 @@ def compute_suggestion(rows: List[Dict],
     if not rows:
         return None, None, []
     totals = [r.get("total") for r in rows if r.get("total") is not None]
+    # Honor explicit min/max bounds when computing the cluster window.
+    if min_price is not None or max_price is not None:
+        totals = [t for t in totals if (min_price is None or t >= min_price) and
+                                    (max_price is None or t <= max_price)]
     if not totals:
         return None, None, []
     used: List[Dict] = []
